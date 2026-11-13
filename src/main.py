@@ -1,5 +1,4 @@
-import os
-import sys
+import os, sys
 from typing import List
 
 from display import Renderer

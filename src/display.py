@@ -1,5 +1,3 @@
-"""Colored terminal display of the simulation."""
-
 from typing import Dict, List
 
 from simulation import Movement
