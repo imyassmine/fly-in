@@ -27,7 +27,7 @@ class FlyInApp:
         try:
             network = MapParser().parse(argv[0])
             plans = Planner(network).plan_all()
-            turns = Simulation(network).run(plans)
+            turns = Simulation.run(plans)
         except (OSError, FlyInError) as err:
             print(f"Error: {err}", file=sys.stderr)
             return 1

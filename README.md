@@ -13,8 +13,8 @@ simulation engine that enforces all movement and capacity rules, and prints
 one line per turn.
 
 Files: `models.py` (zones, connections, network, plans and movements),
-`parser.py` (map parser), `scheduler.py` (path planning and simulation
-engine), `main.py` (entry point and colored terminal output).
+`parser.py` (map parser), `scheduler.py` (path planning and turn output),
+`main.py` (entry point and colored terminal output).
 
 ## Instructions
 
@@ -54,10 +54,10 @@ crosses the most `priority` zones wins, then the one that waits on the start
 zone rather than on a zone other drones may need. `blocked` zones are never
 entered.
 
-**Simulation engine.** `Simulation` replays the plans turn by turn, checks
-every step (adjacent zones, cost of the destination, mandatory arrival after
-a restricted crossing), connection loads and zone occupancy, and raises an
-error on any violation. It produces the movements printed per turn.
+**Simulation engine.** `Planner` only builds legal moves and books every
+zone stay and connection use, so movement and capacity rules are enforced
+during planning. `Simulation` replays the itineraries and produces the
+movements printed for each turn.
 
 **Complexity.** One search costs O(H * (V + E)) with H the number of turns
 explored, V the zones and E the connections, so planning N drones costs

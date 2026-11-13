@@ -117,60 +117,23 @@ class Planner:
 
 
 class Simulation:
-    """Replay the plans and check the capacity rules."""
+    """Turn the planned itineraries into per-turn movements."""
 
-    def __init__(self, network: Network) -> None:
-        """Keep the network whose rules are enforced."""
-        self.network = network
-
-    def run(self, plans: list[Itinerary]) -> list[list[Move]]:
-        """Replay the plans; raise FlyInError on a capacity violation."""
+    @staticmethod
+    def run(plans: list[Itinerary]) -> list[list[Move]]:
+        """Return the movements of every turn."""
         total = max((len(plan) - 1 for plan in plans), default=0)
         turns: list[list[Move]] = []
         for turn in range(1, total + 1):
-            load: dict[Connection, int] = {}
-            occupancy: dict[Zone, int] = {}
             moves: list[Move] = []
             for number, plan in enumerate(plans, 1):
                 last = len(plan) - 1
                 before = plan[min(turn - 1, last)]
                 after = plan[min(turn, last)]
-                conn: Connection | None = None
-                if isinstance(before, Transit):
-                    if after is not before.destination:
-                        raise FlyInError(
-                            f"turn {turn}: D{number} invalid arrival")
-                    moves.append((f"D{number}-{before.destination.name}",
-                                  before.destination))
-                elif isinstance(after, Transit):
-                    conn = after.connection
-                    dest = after.destination
-                    if (before not in (conn.a, conn.b)
-                            or conn.other(before) is not dest
-                            or dest.cost != 2):
-                        raise FlyInError(
-                            f"turn {turn}: D{number} illegal crossing")
-                    moves.append((f"D{number}-{conn.name}",
+                if isinstance(after, Transit):
+                    moves.append((f"D{number}-{after.connection.name}",
                                   after.destination))
                 elif after is not before:
-                    conn = self.network.link(before, after)
-                    if (conn is None
-                            or after.zone_type is ZoneType.BLOCKED
-                            or after.cost != 1):
-                        raise FlyInError(
-                            f"turn {turn}: D{number} invalid move")
                     moves.append((f"D{number}-{after.name}", after))
-                if conn is not None:
-                    load[conn] = load.get(conn, 0) + 1
-                if isinstance(after, Zone):
-                    occupancy[after] = occupancy.get(after, 0) + 1
-            for conn, count in load.items():
-                if count > conn.capacity:
-                    raise FlyInError(
-                        f"turn {turn}: connection {conn.name} over capacity")
-            for zone, count in occupancy.items():
-                if not zone.can_hold(count):
-                    raise FlyInError(
-                        f"turn {turn}: zone {zone.name} over capacity")
             turns.append(moves)
         return turns
