@@ -1,161 +1,135 @@
-import re
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+"""Parse a map file into a validated Network."""
 
-from models import Connection, Network, Zone, ZoneType
+from typing import NoReturn
 
-
-class ParseError(Exception):
-    """Raised when a map file does not respect the expected format."""
+from models import Connection, FlyInError, Network, Zone, ZoneType
 
 
 class MapParser:
-    """Turn the text of a map file into a validated `Network`."""
+    """Turn a map file into a validated `Network`."""
 
     ZONE_KEYS = {"zone", "color", "max_drones"}
     LINK_KEYS = {"max_link_capacity"}
-    ZONE_PREFIXES = {"start_hub", "end_hub", "hub"}
 
     def parse(self, path: str) -> Network:
-        """Read the file at `path` and parse it."""
+        """Read and parse the map at `path`."""
         with open(path, encoding="utf-8") as handle:
-            return self.parse_text(handle.read())
+            return self._parse(handle.read())
 
-    def parse_text(self, text: str) -> Network:
-        """Parse the content of a map and return the network."""
-        nb_drones: Optional[int] = None
-        zones: Dict[str, Zone] = {}
-        connections: List[Connection] = []
-        seen: Set[FrozenSet[str]] = set()
-        start: Optional[Zone] = None
-        end: Optional[Zone] = None
-        for number, raw in enumerate(text.splitlines(), 1):
-            line = raw.split("#", 1)[0].strip()
-            if not line:
-                continue
-            if nb_drones is None:
-                nb_drones = self._parse_drones(line, number)
-                continue
+    def _parse(self, text: str) -> Network:
+        """Parse the map and validate its rules."""
+        lines = [(n, line.split("#", 1)[0].strip())
+                 for n, line in enumerate(text.splitlines(), 1)]
+        lines = [(n, line) for n, line in lines if line]
+        if not lines:
+            raise FlyInError("empty map: nb_drones is missing")
+        number, first = lines[0]
+        key, sep, rest = first.partition(":")
+        if not sep or key != "nb_drones":
+            self._fail(number, "expected 'nb_drones: <positive_integer>'")
+        nb_drones = self._int(rest, number)
+        if nb_drones < 1:
+            self._fail(number, "nb_drones must be a positive integer")
+        zones: dict[str, Zone] = {}
+        links: list[Connection] = []
+        seen: set[frozenset[str]] = set()
+        start: Zone | None = None
+        end: Zone | None = None
+        for number, line in lines[1:]:
             key, sep, rest = line.partition(":")
-            key = key.strip()
             if not sep:
-                raise self._error(number, "missing ':' after the keyword")
-            body, meta = self._split_meta(rest, number)
-            if key in self.ZONE_PREFIXES:
-                zone = self._parse_zone(key, body, meta, zones, number)
-                zones[zone.name] = zone
-                if zone.is_start:
-                    start = self._unique(start, zone, "start_hub", number)
-                if zone.is_end:
-                    end = self._unique(end, zone, "end_hub", number)
-            elif key == "connection":
-                connections.append(
-                    self._parse_link(body, meta, zones, seen, number))
-            elif key == "nb_drones":
-                raise self._error(number, "nb_drones is defined twice")
-            else:
-                raise self._error(number, f"unknown keyword '{key}'")
-        if nb_drones is None:
-            raise ParseError("empty map: nb_drones is missing")
+                self._fail(number, "missing ':'")
+            key = key.strip()
+            body, meta = self._meta(rest, number)
+            if key == "connection":
+                names = body.split("-")
+                if len(body.split()) != 1 or len(names) != 2 or not all(names):
+                    self._fail(number, "expected '<zone1>-<zone2>'")
+                for name in names:
+                    if name not in zones:
+                        self._fail(number, f"unknown zone '{name}'")
+                if names[0] == names[1]:
+                    self._fail(number, "self connection")
+                pair = frozenset(names)
+                if pair in seen:
+                    self._fail(number, f"duplicate connection '{body}'")
+                seen.add(pair)
+                for name in meta.keys() - self.LINK_KEYS:
+                    self._fail(number, f"unknown link metadata '{name}'")
+                links.append(Connection(
+                    zones[names[0]], zones[names[1]],
+                    self._positive(meta, "max_link_capacity", number)))
+                continue
+            if key not in ("start_hub", "end_hub", "hub"):
+                self._fail(number, f"unknown keyword '{key}'")
+            parts = body.split()
+            if len(parts) != 3:
+                self._fail(number, "expected '<name> <x> <y> [metadata]'")
+            name, x, y = parts
+            if "-" in name or name in zones:
+                self._fail(number, f"invalid zone '{name}'")
+            for tag in meta.keys() - self.ZONE_KEYS:
+                self._fail(number, f"unknown zone metadata '{tag}'")
+            try:
+                zone_type = ZoneType(meta.get("zone", "normal"))
+            except ValueError:
+                self._fail(number, f"invalid zone type '{meta['zone']}'")
+            zone = Zone(name, self._int(x, number), self._int(y, number),
+                        zone_type, meta.get("color"),
+                        self._positive(meta, "max_drones", number),
+                        key == "start_hub", key == "end_hub")
+            zones[name] = zone
+            if key == "start_hub":
+                if start is not None:
+                    self._fail(number, "duplicate start_hub")
+                start = zone
+            elif key == "end_hub":
+                if end is not None:
+                    self._fail(number, "duplicate end_hub")
+                end = zone
         if start is None or end is None:
-            raise ParseError("the map needs one start_hub and one end_hub")
-        return Network(nb_drones, list(zones.values()), connections,
-                       start, end)
+            raise FlyInError("the map needs one start_hub and one end_hub")
+        return Network(nb_drones, list(zones.values()), links, start, end)
 
-    @staticmethod
-    def _error(number: int, message: str) -> ParseError:
-        """Build a ParseError that mentions the line number."""
-        return ParseError(f"line {number}: {message}")
-
-    def _unique(self, current: Optional[Zone], zone: Zone, label: str,
-                number: int) -> Zone:
-        """Refuse a second start or end hub."""
-        if current is not None:
-            raise self._error(number, f"more than one {label}")
-        return zone
-
-    def _parse_drones(self, line: str, number: int) -> int:
-        """Parse the 'nb_drones: <positive_integer>' first line."""
-        match = re.fullmatch(r"nb_drones:\s*(\d+)", line)
-        if match is None or int(match.group(1)) < 1:
-            raise self._error(
-                number, "first line must be 'nb_drones: <positive_integer>'")
-        return int(match.group(1))
-
-    def _split_meta(self, text: str,
-                    number: int) -> Tuple[str, Dict[str, str]]:
-        """Split 'body [k=v k=v]' into the body and a metadata dict."""
+    def _meta(self, text: str,
+              number: int) -> tuple[str, dict[str, str]]:
+        """Split `body [k=v ...]` into the body and its metadata."""
         text = text.strip()
-        if "[" not in text and "]" not in text:
+        if "[" not in text:
+            if "]" in text:
+                self._fail(number, "malformed metadata block")
             return text, {}
         if (text.count("[") != 1 or text.count("]") != 1
                 or not text.endswith("]")):
-            raise self._error(number, "malformed metadata block")
+            self._fail(number, "malformed metadata block")
         body, _, inner = text[:-1].partition("[")
-        meta: Dict[str, str] = {}
+        meta: dict[str, str] = {}
         for token in inner.split():
-            name, eq, value = token.partition("=")
-            if not eq or not name or not value:
-                raise self._error(number, f"invalid metadata '{token}'")
-            if name in meta:
-                raise self._error(number, f"duplicate metadata '{name}'")
+            name, sep, value = token.partition("=")
+            if not sep or not name or not value or name in meta:
+                self._fail(number, f"invalid metadata '{token}'")
             meta[name] = value
         return body.strip(), meta
 
-    def _positive(self, value: str, name: str, number: int) -> int:
-        """Parse a strictly positive integer metadata value."""
-        if not re.fullmatch(r"\d+", value) or int(value) < 1:
-            raise self._error(number, f"{name} must be a positive integer")
-        return int(value)
-
-    def _parse_zone(self, prefix: str, body: str, meta: Dict[str, str],
-                    zones: Dict[str, Zone], number: int) -> Zone:
-        """Parse one 'hub' / 'start_hub' / 'end_hub' definition."""
-        parts = body.split()
-        if len(parts) != 3:
-            raise self._error(number, "expected '<name> <x> <y> [metadata]'")
-        name, x, y = parts
-        if "-" in name:
-            raise self._error(number, "zone names cannot contain dashes")
-        if name in zones:
-            raise self._error(number, f"duplicate zone '{name}'")
-        if not (re.fullmatch(r"-?\d+", x) and re.fullmatch(r"-?\d+", y)):
-            raise self._error(number, "coordinates must be integers")
-        for key in meta:
-            if key not in self.ZONE_KEYS:
-                raise self._error(number, f"unknown zone metadata '{key}'")
+    def _int(self, value: str, number: int) -> int:
+        """Parse an integer."""
+        value = value.strip()
+        if value.startswith("+") or "_" in value:
+            self._fail(number, "invalid integer")
         try:
-            zone_type = ZoneType(meta.get("zone", "normal"))
+            return int(value)
         except ValueError:
-            raise self._error(
-                number, f"invalid zone type '{meta['zone']}'") from None
-        capacity = 1
-        if "max_drones" in meta:
-            capacity = self._positive(meta["max_drones"], "max_drones",
-                                      number)
-        return Zone(name, int(x), int(y), zone_type, meta.get("color"),
-                    capacity, prefix == "start_hub", prefix == "end_hub")
+            self._fail(number, "invalid integer")
 
-    def _parse_link(self, body: str, meta: Dict[str, str],
-                    zones: Dict[str, Zone], seen: Set[FrozenSet[str]],
-                    number: int) -> Connection:
-        """Parse one 'connection: a-b [max_link_capacity=n]' line."""
-        names = body.split("-")
-        if len(body.split()) != 1 or len(names) != 2 or not all(names):
-            raise self._error(number, "expected '<zone1>-<zone2>'")
-        for name in names:
-            if name not in zones:
-                raise self._error(number, f"unknown zone '{name}'")
-        if names[0] == names[1]:
-            raise self._error(number, "a zone cannot link to itself")
-        pair = frozenset(names)
-        if pair in seen:
-            raise self._error(number, f"duplicate connection '{body}'")
-        seen.add(pair)
-        for key in meta:
-            if key not in self.LINK_KEYS:
-                raise self._error(number, f"unknown link metadata '{key}'")
-        capacity = 1
-        if "max_link_capacity" in meta:
-            capacity = self._positive(meta["max_link_capacity"],
-                                      "max_link_capacity", number)
-        return Connection(zones[names[0]], zones[names[1]], capacity)
+    def _positive(self, meta: dict[str, str], name: str,
+                  number: int) -> int:
+        """Read a positive metadata value, defaulting to 1."""
+        value = self._int(meta[name], number) if name in meta else 1
+        if value < 1:
+            self._fail(number, f"{name} must be a positive integer")
+        return value
+
+    @staticmethod
+    def _fail(number: int, message: str) -> NoReturn:
+        """Raise an error prefixed with the line number."""
+        raise FlyInError(f"line {number}: {message}")

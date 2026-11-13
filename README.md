@@ -12,19 +12,19 @@ program parses a map file, plans every drone, replays the plans in a
 simulation engine that enforces all movement and capacity rules, and prints
 one line per turn.
 
-Files: `models.py` (zones, connections, network), `parser.py` (map parser),
-`scheduler.py` (path planning), `simulation.py` (rules engine),
-`display.py` (colored output), `main.py` (entry point).
+Files: `models.py` (zones, connections, network, plans and movements),
+`parser.py` (map parser), `scheduler.py` (path planning and simulation
+engine), `main.py` (entry point and colored terminal output).
 
 ## Instructions
 
 Python 3.10 or later is required.
 
 ```
-make install                       # flake8 and mypy
-make run MAP=01_linear_path.txt    # or: python3 main.py <map_file>
-make debug MAP=01_linear_path.txt  # run under pdb
-make lint                          # flake8 + mypy
+make install                                  # flake8 and mypy
+make run MAP=maps/easy/01_linear_path.txt     # or: python3 src/main.py <map_file>
+make debug MAP=maps/easy/01_linear_path.txt   # run under pdb
+make lint                                     # flake8 + mypy
 make clean
 ```
 
@@ -107,4 +107,4 @@ connection (`D1-hub-roof1`), then with the zone on the next turn.
 - Breadth-first search and shortest paths: https://en.wikipedia.org/wiki/Breadth-first_search
 - Time-expanded networks: https://en.wikipedia.org/wiki/Flow_network
 
-AI usage: Claude was used to review and debugg the code, and to write this README.
+AI usage: Claude was used to review and debug the code, and to write this README.
